@@ -6,6 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+futures-util = "0.3.28"
+google-cloud-auth = "0.9.2"
+google-cloud-default = { version="0.2.0", features=["pubsub"] }
 google-cloud-gax = "0.14.1"
+google-cloud-googleapis = "0.8.0"
 google-cloud-pubsub = "0.14.1"
 tokio = { version="1.27.0", feature=["full"] }
