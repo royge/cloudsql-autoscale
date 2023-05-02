@@ -13,3 +13,4 @@ google-cloud-gax = "0.14.1"
 google-cloud-googleapis = "0.8.0"
 google-cloud-pubsub = "0.14.1"
 tokio = { version="1.27.0", feature=["full"] }
+tokio-util = "0.7.8"
