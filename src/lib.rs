@@ -1,16 +1,17 @@
 use futures_util::StreamExt;
 use google_cloud_gax::grpc::Status;
+use google_cloud_gax::retry::RetrySetting;
 use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 use google_cloud_pubsub::client::{Client, ClientConfig};
-use google_cloud_pubsub::subscription::{Subscription, SubscriptionConfig};
+use google_cloud_pubsub::subscription::{SubscriptionConfig};
+use google_cloud_pubsub::topic::Topic;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 pub struct Scaler<W> {
-    client: Option<Client>,
     worker: Option<Arc<Mutex<W>>>,
-    subscription: Option<Subscription>,
-    artifact_store: RefCell<Vec<String>>,
+    topic: Option<Topic>,
+    artifact_store: Arc<Mutex<RefCell<Vec<String>>>>,
 }
 
 impl<W: Worker> Scaler<W> {
@@ -38,42 +39,49 @@ impl<W: Worker> Scaler<W> {
         }
 
         Ok(Scaler {
-            client: Some(client),
             worker: None,
-            subscription: Some(subscription),
-            artifact_store: RefCell::new(vec![]),
+            topic: Some(topic),
+            artifact_store: Arc::new(Mutex::new(RefCell::new(vec![]))),
         })
     }
 
     pub async fn scale(&self) -> Result<(), Status> {
-        let subscription = self.subscription.as_ref().unwrap();
-        // Read the messages as a stream
-        // Note: This blocks the current thread but helps working with non clonable data
-        let mut stream = subscription.subscribe(None).await?;
-        while let Some(message) = stream.next().await {
-            // Ack or Nack message.
-            let _ = message.ack().await;
+        let subscriptions = self
+            .topic
+            .as_ref()
+            .unwrap()
+            .subscriptions(Some(RetrySetting::default()));
 
-            let msg = message.message.clone();
-            let msg_id = msg.message_id;
+        // Only listen to first subscriber.
+        for subscription in subscriptions.await.unwrap() {
+            // Read the messages as a stream
+            // Note: This blocks the current thread but helps working with non clonable data
+            let mut stream = subscription.subscribe(None).await?;
+            while let Some(message) = stream.next().await {
+                // Ack or Nack message.
+                let _ = message.ack().await;
 
-            if self.artifact_store.borrow().contains(&msg_id) {
-                continue;
-            }
+                let msg = message.message.clone();
+                let msg_id = msg.message_id;
 
-            let status = self
-                .worker
-                .as_ref()
-                .expect("No job worker defined!")
-                .lock()
-                .unwrap()
-                .execute(Message::NewJob(message.message));
+                if self.artifact_store.lock().unwrap().borrow().contains(&msg_id) {
+                    continue;
+                }
 
-            self.artifact_store.borrow_mut().push(msg_id);
+                let status = self
+                    .worker
+                    .as_ref()
+                    .expect("No job worker defined!")
+                    .lock()
+                    .unwrap()
+                    .execute(Message::NewJob(message.message));
 
-            match status {
-                JobStatus::Stop => break,
-                JobStatus::Continue => {}
+                self.artifact_store.lock().unwrap().borrow_mut().push(msg_id);
+
+                match status {
+                    JobStatus::Stop => break,
+                    JobStatus::Continue => {}
+                }
             }
         }
         Ok(())
@@ -135,10 +143,7 @@ mod tests {
         }
     }
 
-    async fn publish_data(client: Client, inputs: Vec<String>, topic_name: &str) {
-        // Create topic.
-        let topic = client.topic(topic_name);
-
+    async fn publish_test_data(topic: &Topic, inputs: Vec<String>) {
         // Start publisher.
         let publisher = topic.new_publisher(None);
 
@@ -190,6 +195,7 @@ mod tests {
     async fn test_new_scaler() {
         let topic_name = "test-cloudsql-autoscaler";
         let config = ClientConfig::default().with_auth().await.unwrap();
+
         let scaler = Scaler::new(config, topic_name);
         let mut scaler = scaler.await.unwrap();
 
@@ -217,11 +223,10 @@ mod tests {
         dummy_worker.iteration = RefCell::new(inputs.len());
         scaler.worker = Some(Arc::new(Mutex::new(dummy_worker)));
 
-        let client = scaler.client.as_ref().unwrap();
-        let client = client.clone();
+        let topic = scaler.topic.as_ref().unwrap().clone();
         let inputs_clone = inputs.clone();
         let handle = tokio::spawn(async move {
-            publish_data(client, inputs_clone, topic_name).await;
+            publish_test_data(&topic, inputs_clone).await;
         });
 
         scaler.scale().await.unwrap();
