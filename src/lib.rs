@@ -1,15 +1,23 @@
+use colored::Colorize;
 use futures_util::StreamExt;
+use google_cloud_auth::error::Error;
+use google_cloud_auth::project::Config;
+use google_cloud_auth::token::DefaultTokenSourceProvider;
 use google_cloud_gax::grpc::Status;
 use google_cloud_gax::retry::RetrySetting;
 use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 use google_cloud_pubsub::client::{Client, ClientConfig};
-use google_cloud_pubsub::subscription::{SubscriptionConfig};
+use google_cloud_pubsub::subscription::SubscriptionConfig;
 use google_cloud_pubsub::topic::Topic;
+use google_cloud_token::TokenSourceProvider;
+use reqwest;
+use serde_json::to_string_pretty;
 use std::cell::RefCell;
+use std::str::from_utf8;
 use std::sync::{Arc, Mutex};
 
 pub struct Scaler<W> {
-    worker: Option<Arc<Mutex<W>>>,
+    pub worker: Option<Arc<Mutex<W>>>,
     topic: Option<Topic>,
     artifact_store: Arc<Mutex<RefCell<Vec<String>>>>,
 }
@@ -64,7 +72,13 @@ impl<W: Worker> Scaler<W> {
                 let msg = message.message.clone();
                 let msg_id = msg.message_id;
 
-                if self.artifact_store.lock().unwrap().borrow().contains(&msg_id) {
+                if self
+                    .artifact_store
+                    .lock()
+                    .unwrap()
+                    .borrow()
+                    .contains(&msg_id)
+                {
                     continue;
                 }
 
@@ -76,7 +90,11 @@ impl<W: Worker> Scaler<W> {
                     .unwrap()
                     .execute(Message::NewJob(message.message));
 
-                self.artifact_store.lock().unwrap().borrow_mut().push(msg_id);
+                self.artifact_store
+                    .lock()
+                    .unwrap()
+                    .borrow_mut()
+                    .push(msg_id);
 
                 match status {
                     JobStatus::Stop => break,
@@ -92,11 +110,13 @@ pub trait Worker {
     fn execute(&self, job: Message) -> JobStatus;
 }
 
-pub struct JobWorker {}
+pub struct JobWorker {
+    replicator: Option<Box<dyn Replicator>>,
+}
 
 impl JobWorker {
-    fn new() -> JobWorker {
-        JobWorker {}
+    pub fn new() -> JobWorker {
+        JobWorker { replicator: None }
     }
 }
 
@@ -105,7 +125,9 @@ impl Worker for JobWorker {
         match job {
             Message::NewJob(job) => {
                 // Handle data.
-                println!("Got Message: {:?}", job);
+                let data = from_utf8(&job.data).unwrap().to_string();
+                let data = to_string_pretty(&data).unwrap();
+                println!("{}", data.green());
             }
         }
 
@@ -122,11 +144,67 @@ pub enum JobStatus {
     Stop,
 }
 
+pub trait Replicator {
+    fn add_read_replica(&self) -> Result<(), String>;
+    fn remove_read_replica(&self) -> Result<(), String>;
+}
+
+pub struct CloudSQLReplicator {
+    client: reqwest::Client,
+}
+
+impl CloudSQLReplicator {
+    fn new() -> CloudSQLReplicator {
+        let client = reqwest::Client::new();
+
+        CloudSQLReplicator { client }
+    }
+}
+
+impl Replicator for CloudSQLReplicator {
+    fn add_read_replica(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn remove_read_replica(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+pub struct Authenticator {}
+
+impl Authenticator {
+    fn new() -> Authenticator {
+        Authenticator {}
+    }
+
+    async fn authenticate(&self) -> Result<String, Error> {
+        let audience = "https://spanner.googleapis.com/";
+        let scopes = [
+            "https://www.googleapis.com/auth/cloud-platform",
+            "https://www.googleapis.com/auth/spanner.data",
+        ];
+        let config = Config {
+            // audience is required only for service account jwt-auth
+            // https://developers.google.com/identity/protocols/oauth2/service-account#jwt-auth
+            audience: Some(audience),
+            // scopes is required only for service account Oauth2
+            // https://developers.google.com/identity/protocols/oauth2/service-account
+            scopes: Some(&scopes),
+        };
+        let tp = DefaultTokenSourceProvider::new(config).await?;
+        let ts = tp.token_source();
+
+        Ok(ts.token().await.unwrap())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use google_cloud_default::WithAuthExt;
     use std::cell::RefCell;
+    use std::dbg;
     use std::str::from_utf8;
 
     struct DummyWorker {
@@ -236,6 +314,7 @@ mod tests {
         assert_eq!(inputs.sort(), results.sort());
     }
 
+    #[test]
     fn test_new_worker() {
         let worker = JobWorker::new();
         let msg = PubsubMessage {
@@ -245,5 +324,17 @@ mod tests {
             ..Default::default()
         };
         worker.execute(Message::NewJob(msg));
+    }
+
+    #[test]
+    fn test_new_cloud_sql_replicator() {
+        let _ = CloudSQLReplicator::new();
+    }
+
+    #[tokio::test]
+    async fn test_authenticator_authenticate() {
+        let auth = Authenticator::new();
+        let token = auth.authenticate().await.unwrap();
+        dbg!(token);
     }
 }
