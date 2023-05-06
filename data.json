@@ -1,0 +1,57 @@
+{
+    "incident": {
+        "condition": {
+            "conditionThreshold": {
+                "aggregations": [
+                    {
+                        "alignmentPeriod": "60s",
+                        "perSeriesAligner": "ALIGN_MEAN"
+                    }
+                ],
+                "comparison": "COMPARISON_GT",
+                "duration": "0s",
+                "filter": "???",
+                "thresholdValue": 0.09,
+                "trigger": {
+                    "percent": 1
+                }
+            },
+            "displayName": "???",
+            "name": "???"
+        },
+        "condition_name": "???",
+        "ended_at": null,
+        "encident_id": "????",
+        "metadata": {
+            "system_labels": {},
+            "user_labels": {}
+        },
+        "metric": {
+            "displayName": "CPU utilization",
+            "labels": {},
+            "type": "???"
+        },
+        "observed_value": "0.107",
+        "policy_name": "???",
+        "resource": {
+            "labels": {
+                "database_id": "???",
+                "project_id": "???",
+                "region": "???"
+            },
+            "type": "cloudsql_database"
+        },
+        "resource_display_name": "???",
+        "resource_id": "",
+        "resource_name": "???",
+        "resource_type_display_name": "Cloud SQL Database",
+        "scoping_project_id": "???",
+        "scoping_project_number": 12345,
+        "started_at": 123456,
+        "state": "open",
+        "summary": "???",
+        "threshold_value": "0.09",
+        "url": "https://???"
+    },
+    "version": "1.0"
+}
