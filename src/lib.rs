@@ -179,10 +179,10 @@ impl Authenticator {
     }
 
     async fn authenticate(&self) -> Result<String, Error> {
-        let audience = "https://spanner.googleapis.com/";
+        let audience = "https://sqladmin.googleapis.com/";
         let scopes = [
             "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/spanner.data",
+            "https://www.googleapis.com/auth/sqlservice.admin",
         ];
         let config = Config {
             // audience is required only for service account jwt-auth
@@ -203,8 +203,11 @@ impl Authenticator {
 mod tests {
     use super::*;
     use google_cloud_default::WithAuthExt;
+    use reqwest;
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::dbg;
+    use std::env;
     use std::str::from_utf8;
 
     struct DummyWorker {
@@ -335,6 +338,29 @@ mod tests {
     async fn test_authenticator_authenticate() {
         let auth = Authenticator::new();
         let token = auth.authenticate().await.unwrap();
-        dbg!(token);
+        assert_ne!("", token);
+    }
+
+    #[tokio::test]
+    async fn test_get_sql_instances() {
+        let auth = Authenticator::new();
+        let token = auth.authenticate().await.unwrap();
+
+        let project_id = env::var("PROJECT_ID").unwrap();
+        let api_url = format!(
+            "https://www.googleapis.com/sql/v1beta4/projects/{}/instances",
+            project_id
+        );
+
+        dbg!(&api_url);
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(api_url)
+            .bearer_auth(token.replace("Bearer ", ""))
+            .send().await
+            .unwrap()
+            .text().await
+            .unwrap();
+        dbg!(resp);
     }
 }
