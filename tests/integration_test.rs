@@ -1,14 +1,19 @@
 use cloudsql_autoscale::{
-    Authenticator, CloudSQLReplicator, JobStatus, JobWorker, Message, Scaler, Worker,
+    Action, Authenticator, CloudSQLReplicator, JobStatus, JobWorker, Message, Scaler, Worker,
 };
 use google_cloud_default::WithAuthExt;
 use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 use google_cloud_pubsub::client::ClientConfig;
 use google_cloud_pubsub::topic::Topic;
 use reqwest;
+use serde_json;
+use serde_json::Value;
 use std::cell::RefCell;
 use std::dbg;
 use std::env;
+use std::fs::File;
+use std::io::read_to_string;
+use std::io::BufReader;
 use std::str::from_utf8;
 use std::sync::{Arc, Mutex};
 
@@ -132,6 +137,18 @@ fn test_new_worker() {
 }
 
 #[test]
+fn test_worker_todo() {
+    let worker = JobWorker::new();
+
+    let file = File::open("./data.json").unwrap();
+    let reader = BufReader::new(file);
+    let data = read_to_string(reader).unwrap();
+
+    let action = worker.todo(data.as_str());
+    assert_eq!(Some(Action::Add("")), action);
+}
+
+#[test]
 fn test_new_cloud_sql_replicator() {
     let _ = CloudSQLReplicator::new();
 }
@@ -166,4 +183,19 @@ async fn test_get_sql_instances() {
         .await
         .unwrap();
     dbg!(resp);
+}
+
+#[test]
+fn test_decode_incident_data() {
+    let file = File::open("./data.json").unwrap();
+    let reader = BufReader::new(file);
+    let v: Value = serde_json::from_reader(reader).unwrap();
+
+    let comparison = &v["incident"]["condition"]["conditionThreshold"]["comparison"];
+    let threshold_value = &v["incident"]["threshold_value"];
+    let observed_value = &v["incident"]["observed_value"];
+
+    assert_eq!("COMPARISON_GT", comparison);
+    assert_eq!("0.09", threshold_value);
+    assert_eq!("0.107", observed_value);
 }

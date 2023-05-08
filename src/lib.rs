@@ -1,4 +1,3 @@
-use colored::Colorize;
 use futures_util::StreamExt;
 use google_cloud_auth::project::Config;
 use google_cloud_auth::token::DefaultTokenSourceProvider;
@@ -10,7 +9,8 @@ use google_cloud_pubsub::subscription::SubscriptionConfig;
 use google_cloud_pubsub::topic::Topic;
 use google_cloud_token::TokenSourceProvider;
 use reqwest;
-use serde_json::to_string_pretty;
+use serde_json;
+use serde_json::Value;
 use std::cell::RefCell;
 use std::error::Error;
 use std::str::from_utf8;
@@ -118,6 +118,18 @@ impl JobWorker {
     pub fn new() -> JobWorker {
         JobWorker { replicator: None }
     }
+
+    pub fn todo(&self, job: &str) -> Option<Action> {
+        if let Ok(v) = serde_json::from_str::<Value>(job) {
+            let comparison = &v["incident"]["condition"]["conditionThreshold"]["comparison"];
+            if comparison == "COMPARISON_GT" {
+                return Some(Action::Add(""));
+            } else {
+                return Some(Action::Remove(""));
+            }
+        }
+        None
+    }
 }
 
 impl Worker for JobWorker {
@@ -125,14 +137,28 @@ impl Worker for JobWorker {
         match job {
             Message::NewJob(job) => {
                 // Handle data.
-                let data = from_utf8(&job.data).unwrap().to_string();
-                let data = to_string_pretty(&data).unwrap();
-                println!("{}", data.green());
+                let data = from_utf8(&job.data).unwrap();
+                let action = self.todo(data);
+                match action {
+                    Some(Action::Add(name)) => {
+                        let _ = self.replicator.as_ref().unwrap().add_read_replica(name);
+                    },
+                    Some(Action::Remove(name)) => {
+                        let _ = self.replicator.as_ref().unwrap().remove_read_replica(name);
+                    },
+                    None => {}
+                }
             }
         }
 
         JobStatus::Continue
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Action<'a> {
+    Add(&'a str),
+    Remove(&'a str),
 }
 
 pub enum Message {
@@ -145,8 +171,8 @@ pub enum JobStatus {
 }
 
 pub trait Replicator {
-    fn add_read_replica(&self) -> Result<(), String>;
-    fn remove_read_replica(&self) -> Result<(), String>;
+    fn add_read_replica(&self, name: &str) -> Result<(), Box<dyn Error>>;
+    fn remove_read_replica(&self, name: &str) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct CloudSQLReplicator {
@@ -162,11 +188,11 @@ impl CloudSQLReplicator {
 }
 
 impl Replicator for CloudSQLReplicator {
-    fn add_read_replica(&self) -> Result<(), String> {
+    fn add_read_replica(&self, name: &str) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 
-    fn remove_read_replica(&self) -> Result<(), String> {
+    fn remove_read_replica(&self, name: &str) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 }
