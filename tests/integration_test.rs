@@ -6,6 +6,9 @@ use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 use google_cloud_pubsub::client::ClientConfig;
 use google_cloud_pubsub::topic::Topic;
 use reqwest;
+use reqwest::header::HeaderMap;
+use reqwest::header::CONTENT_LENGTH;
+use serde::Serialize;
 use serde_json;
 use serde_json::Value;
 use std::cell::RefCell;
@@ -161,14 +164,15 @@ async fn test_authenticator_authenticate() {
 }
 
 #[tokio::test]
-async fn test_get_sql_instances() {
+async fn test_get_sql_instance() {
     let auth = Authenticator::new();
     let token = auth.authenticate().await.unwrap();
 
     let project_id = env::var("PROJECT_ID").unwrap();
+    let instance_name = env::var("INSTANCE_NAME").unwrap();
     let api_url = format!(
-        "https://www.googleapis.com/sql/v1beta4/projects/{}/instances",
-        project_id
+        "https://www.googleapis.com/sql/v1beta4/projects/{}/instances/{}",
+        project_id, instance_name,
     );
 
     dbg!(&api_url);
@@ -176,6 +180,85 @@ async fn test_get_sql_instances() {
     let resp = client
         .get(api_url)
         .bearer_auth(token.replace("Bearer ", ""))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    dbg!(resp);
+}
+
+#[derive(Debug, Serialize)]
+struct ReplicaSettings {
+    tier: String,
+    availabilityType: String,
+    pricingPlan: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplicaInstance {
+    name: String,
+    instanceType: String,
+    masterInstanceName: String,
+    databaseVersion: String,
+    region: String,
+    settings: ReplicaSettings,
+}
+
+#[tokio::test]
+async fn test_add_sql_instance_replica() {
+    let auth = Authenticator::new();
+    let token = auth.authenticate().await.unwrap();
+
+    let project_id = env::var("PROJECT_ID").unwrap();
+    let instance_name = env::var("INSTANCE_NAME").unwrap();
+
+    let api_url = format!(
+        "https://www.googleapis.com/sql/v1beta4/projects/{}/instances/{}",
+        project_id, instance_name,
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(api_url)
+        .bearer_auth(token.replace("Bearer ", ""))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let v: Value = serde_json::from_str(resp.as_str()).unwrap();
+
+    dbg!(v["databaseVersion"].as_str().unwrap());
+
+    let api_url = format!(
+        "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances",
+        project_id,
+    );
+
+    let replica_instance = ReplicaInstance {
+        name: format!("{}-replica", v["name"].as_str().unwrap().to_string()),
+        instanceType: "READ_REPLICA_INSTANCE".to_string(),
+        masterInstanceName: v["name"].as_str().unwrap().to_string(),
+        databaseVersion: v["databaseVersion"].as_str().unwrap().to_string(),
+        region: v["region"].as_str().unwrap().to_string(),
+        settings: ReplicaSettings {
+            tier: v["settings"]["tier"].as_str().unwrap().to_string(),
+            availabilityType: v["settings"]["availabilityType"].as_str().unwrap().to_string(),
+            pricingPlan: v["settings"]["pricingPlan"].as_str().unwrap().to_string(),
+        },
+    };
+
+    dbg!(&api_url);
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(api_url)
+        .bearer_auth(token.replace("Bearer ", ""))
+        // .headers(headers)
+        .json(&replica_instance)
         .send()
         .await
         .unwrap()
